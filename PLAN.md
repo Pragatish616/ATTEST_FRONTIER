@@ -232,6 +232,63 @@ Run **A0 first, alone**. Then A1–A5 in parallel. Then A6.
 
 **File-ownership rule:** an agent may only write files in its own column. Cross-cutting change → stop, state the needed contract change, wait. This is what stops parallel agents from stomping each other.
 
+## 8. Hour-by-hour
+
+| Hours | Work | Gate |
+|---|---|---|
+| 0–2 | A0 alone. Schema pushed to Supabase, models importable, LLM router returns a completion. | `pytest tests/test_contracts.py` green |
+| 2–8 | A1, A2, A3 in parallel. Each ships a `verify(claim, context) -> Verification` that runs standalone. | each verifier has a passing unit test on a fixture |
+| 8–14 | A4 wires fan-out + reconciler + API. A5 builds SDK + demo corpus. | `POST /observe` returns a full trace end-to-end |
+| 14–18 | SSE streaming live. Antigravity connects to real API. **Seed the demo corpus with one stale doc and one subtly-unsupported claim.** | dashboard shows a live run |
+| 18–22 | Sleep in shifts. | — |
+| 22–28 | A6 benchmark + ablation. Fix the worst verifier. | results table populated |
+| 28–32 | Opal mini-app, CI mode, polish. | judge can run it themselves |
+| 32–34 | Rehearse demo 5×. Record backup video. | video exists |
+| 34–36 | **CODE FREEZE.** Deck only. | no commits |
+
+Freeze at 32 even if something is unfinished. Teams still pushing at minute 5 of judging always look it.
+
+## 9. Demo script (5 min)
+
+**Act 1 — hook (60s).** Run the Opal demo agent on a seeded question. Answer is fluent, confident, well-cited-looking. Pause: *"Every claim here reads as grounded. Two are wrong."* Show the one-line SDK decorator. Re-run.
+
+**Act 2 — reveal (2m).** Dashboard streams live. Sentences highlight as verdicts land. One goes **amber `FRAGILE`** — click it, open the probe panel: the original claim passed, the *negated* claim also passed, so the verifier never read the context. One goes **purple `STALE`** — click it: retrieved chunk says X, independent retrieval says the current answer is Y. **The amber click is the moment of the pitch.** No competing tool shows this.
+
+**Act 3 — it's a product (90s).** Benchmark + ablation table. CI mode failing a build. Cost/sampling config. Close on the decorator again.
+
+**Backup:** recorded video of the identical run, queued and ready. Hackathon wifi kills more demos than bad code.
+
+## 10. Benchmark (this is what wins technical judges)
+
+Dataset: **RAGTruth** or **HaluEval**, 200–300 examples. Report:
+
+| System | Precision | Recall | F1 | Cost/claim | p95 latency |
+|---|---|---|---|---|---|
+| Single-pass LLM judge (baseline) | | | | | |
+| ATTEST − prober (ablation) | | | | | |
+| ATTEST − independent (ablation) | | | | | |
+| **ATTEST full** | | | | | |
+
+The **ablation rows are the entire argument**. If the prober adds nothing, you need to know that before the judges do.
+
+## 11. Known flaws — state these before judges find them
+
+| Flaw | Prepared answer |
+|---|---|
+| Latency & cost: 3 verifiers × N claims | Sampling + cheap decomposer + claim-hash cache. Observability layer, not an inline blocker, unless opted in. Have cost-per-1k-requests memorised. |
+| Grounded ≠ true | Say it first. Faithfulness and truth are different axes; `STALE` is our partial reach toward truth and we don't overclaim past it. |
+| Who verifies the verifier? | Ablation numbers, plus: *disagreement between independent verifiers is itself the signal*, not any single verdict. |
+| Entailment is weak on numerics and negation | Known NLI failure mode — which is exactly what quantifier-shift probes target. Demo a numeric case working. |
+| Decomposition is lossy on compound sentences | Acknowledged. Unresolvable claims surface as `UNVERIFIABLE`, never silently dropped. |
+| "Isn't this just RAGAS?" | §2, memorised, in order. |
+
+## 12. Judge Q&A
+
+- *What's actually agentic here?* Three verifiers make independent judgments; the prober plans its own mutation strategy per claim type; a reconciler resolves genuine disagreement. It's a contested fan-out, not a chain.
+- *Would you run this in production?* Yes — 5% sampling on the live path, 100% in CI. *[state cost number]*
+- *What breaks first at scale?* Verifier cost and decomposition quality on long outputs. Roadmap: distil entailment into a small fine-tuned classifier, keep LLMs only for the prober.
+- *Why you?* You run multi-agent systems in production at your internship and built this because you needed it. Almost nobody else in the room can say that truthfully.
+
 ## 13. Definition of done
 
 - [ ] `POST /observe` returns a full trace with all five verdict types reachable

@@ -275,3 +275,51 @@ agent's file, write it to `HANDOFF.md` instead of editing directly.
 `tests/fixtures/` exists (currently just a `.gitkeep`) — per CLAUDE.md, this
 is the *only* place mock/fixture data may live; nothing in the main path may
 be backed by hardcoded verdicts.
+
+---
+
+## Hardening + deploy prep (built, not yet deployed)
+
+Cross-cutting work done after A6, outside the A0–A6 lanes. Not part of the
+original PLAN.md §7 split.
+
+**Shipped:**
+
+- `attest/api/security.py` — bearer auth, per-IP rate limiting (separate
+  read / write / expensive buckets), request-size cap, and security headers,
+  all as **raw ASGI middleware** so `EventSourceResponse` is never buffered.
+  Auth is a no-op unless `ATTEST_API_KEY` is set, which keeps the frozen §5.2
+  contract open for the dashboard and Opal tracks. `tests/test_security.py`
+  covers it.
+- `attest/config.py` — new settings: `cors_allow_origins` (comma-separated
+  string, with a `cors_origins` list property), `attest_api_key`,
+  `max_budget_usd`, `max_request_bytes`, the three rate-limit knobs,
+  `trusted_proxy_hops`, and an `is_production` property. Additive only; no
+  existing setting changed.
+- `attest/search.py` — search queries are now logged as a 12-char SHA-256
+  digest (`_query_digest`) instead of verbatim, so host-application user
+  content never enters our log retention.
+- `migrations/002_rls.sql` + rollback — row-level security.
+- `Dockerfile`, `.dockerignore`, `railway.json`, `render.yaml` — container +
+  deploy config, single-process by construction.
+- `dashboard/attest-dashboard.html` — single-file trace dashboard, claim
+  detail showing all three verifiers plus per-mutation probes.
+- `.gitattributes` — LF normalization (see `FAILURES.md` for why).
+- Repo hygiene: rewritten `README.md`, new `DECISIONS.md` and `FAILURES.md`,
+  hardened `.gitignore`, `scripts/scan-secrets.sh`, CI workflow running ruff
+  and pytest on push.
+
+**Not done:**
+
+- **Nothing is actually deployed.** The deploy configs exist and are
+  unexercised — no Railway/Render service has been created, no URL exists.
+- `MAX_BUDGET_USD` enforcement lives in `api/routes.py::observe`; confirm it
+  is exercised by a test before claiming the credit-burn threat is closed.
+- The benchmark still has no real numbers (`bench/results.md` reads
+  `PENDING`). This is the single largest gap against PLAN.md §13.
+- The demo's generation half still has not been run end to end against a real
+  key. See `HANDOFF.md` and `FAILURES.md`.
+
+**What the next session needs:** run `uv run pytest` and record the real
+count here — the last recorded figure (221) predates `tests/test_security.py`
+and is now stale.

@@ -1,38 +1,62 @@
-# Python
+# --- Secrets. Never relax these. ---
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+credentials.json
+service-account*.json
+
+# --- Python ---
 __pycache__/
 *.py[cod]
 *.egg-info/
 .eggs/
 .ruff_cache/
 .pytest_cache/
+.mypy_cache/
 .coverage
 htmlcov/
+dist/
+build/
 
-# Environments
+# --- Environments ---
 .venv/
 venv/
-.env
+env/
 
-# uv
+# --- uv ---
 uv.lock.bak
 
-# Data / local stores
+# --- Data / local stores (regenerable; keeps the repo small) ---
 data/chroma/
 data/search_cache/
 *.sqlite3
 bench/data_cache/
 
-# Editors / OS
+# --- Pitch / presentation material (kept local, not published) ---
+SPEECH.md
+PRESENTATION_NOTES.md
+slide-*.jpg
+slide-*.png
+*.pptx
+
+# --- Editors / OS / agent tooling ---
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
-
-# Logs
-*.log
-
-# Agent skill tooling (installed via `npx skills add`, not project source)
+.claude/
 .agents/
-.claude/skills/
 agent/
 skills-lock.json
+graphify-out/
+
+# --- Logs / scratch ---
+*.log
+_deltest
+scratch/
+tmp/
+
+# --- One-time operational notes, not project source ---
+PUSH_PROMPT.md

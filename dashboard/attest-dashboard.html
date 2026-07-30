@@ -34,10 +34,10 @@
     border:1px solid var(--hair);border-radius:999px;padding:9px 10px 9px 20px}
   .brand{font-weight:600;letter-spacing:-.02em;font-size:14px}
   .brand span{color:var(--faint);font-weight:400}
-  input[type=text]{background:rgba(255,255,255,.05);border:1px solid var(--hair-soft);color:var(--ink);
+  input[type=text],input[type=password]{background:rgba(255,255,255,.05);border:1px solid var(--hair-soft);color:var(--ink);
     border-radius:999px;padding:8px 14px;font-family:var(--mono);font-size:11.5px;min-width:190px;outline:none;
     transition:border-color .4s var(--ease),background .4s var(--ease)}
-  input[type=text]:focus{border-color:rgba(255,255,255,.24);background:rgba(255,255,255,.07)}
+  input[type=text]:focus,input[type=password]:focus{border-color:rgba(255,255,255,.24);background:rgba(255,255,255,.07)}
   .btn{display:inline-flex;align-items:center;gap:10px;cursor:pointer;background:var(--ink);color:#08080a;
     border:none;border-radius:999px;padding:8px 8px 8px 18px;font-family:var(--sans);font-size:12.5px;
     font-weight:550;letter-spacing:-.01em;transition:transform .5s var(--ease),opacity .4s var(--ease)}
@@ -129,7 +129,7 @@
 
   @media (max-width:760px){
     .wrap{padding:0 16px 90px} header.hero{padding:48px 0 26px} .core{padding:20px}
-    .island{border-radius:22px;padding:12px} input[type=text]{min-width:0;width:100%}
+    .island{border-radius:22px;padding:12px} input[type=text],input[type=password]{min-width:0;width:100%}
   }
   @media (prefers-reduced-motion:reduce){
     *{transition:none!important;animation:none!important}
@@ -144,7 +144,8 @@
   <nav>
     <div class="island">
       <div class="brand"><b>ATTEST</b> <span>/ trace</span></div>
-      <input type="text" id="api" value="http://localhost:8000/v1" spellcheck="false" aria-label="API base URL" />
+      <input type="text" id="api" value="https://attest-api-production.up.railway.app/v1" spellcheck="false" aria-label="API base URL" />
+      <input type="password" id="key" placeholder="API key — blank if auth off" spellcheck="false" aria-label="API key" />
       <input type="text" id="runid" placeholder="run id — blank = latest" spellcheck="false" aria-label="Run ID" />
       <button class="btn ghost" id="load">Load run <i>&#8599;</i></button>
     </div>
@@ -195,8 +196,19 @@ const stage = document.getElementById('stage');
 const io = new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}}),{threshold:.08});
 const animate = () => document.querySelectorAll('.reveal:not(.in)').forEach(el=>io.observe(el));
 
+/* Bearer auth. The deployed API sets ATTEST_API_KEY, so every route except
+   /v1/health needs `Authorization: Bearer <key>`. Left blank the header is
+   omitted entirely, which is what a local server with auth disabled expects —
+   sending `Bearer ` there would still pass (the middleware is a no-op), but an
+   absent header keeps the request identical to the pre-auth contract. */
+const apiKey = () => (document.getElementById('key')?.value || '').trim();
+const authHeaders = (extra = {}) => {
+  const k = apiKey();
+  return k ? {...extra, authorization: `Bearer ${k}`} : {...extra};
+};
+
 async function jget(url){
-  const r = await fetch(url,{headers:{'accept':'application/json'}});
+  const r = await fetch(url,{headers:authHeaders({'accept':'application/json'})});
   if(!r.ok) throw new Error(`${r.status} ${r.statusText} — ${url}`);
   return r.json();
 }
@@ -227,7 +239,7 @@ async function ask(){
   setStatus('generating answer…', true);
   try{
     const r = await fetch(`${api()}/demo/query`, {
-      method:'POST', headers:{'content-type':'application/json'},
+      method:'POST', headers:authHeaders({'content-type':'application/json'}),
       body: JSON.stringify({query:q, k:+document.getElementById('k').value})
     });
     const body = await r.json().catch(()=>({}));

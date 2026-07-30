@@ -2,245 +2,241 @@
 
 **A runtime adversarial grounding layer for RAG and agentic systems.**
 
-Built 27–30 July 2026 by team **Byte_pros** for **FRONTIER 2026** — AWS Student Builder
-Groups, VIT Chennai — in the AI Safety & Observability track.
+ATTEST decomposes an AI system's answer into atomic claims and verifies each one
+three independent ways — entailment against the retrieved context, an adversarial
+prober that mutates the claim and re-checks it, and an independent web retrieval
+that catches sources that were themselves wrong or outdated. A reconciler merges
+the three verdicts and streams the full reasoning trail to a live dashboard.
+
+Built for **FRONTIER 2026** (AWS Student Builder Groups, VIT Chennai) — AI Safety
+& Observability track — by team **Byte_pros**.
 
 ---
 
-## The problem
+## Why this is not another RAGAS
 
-A RAG system that cites a source is not the same as a RAG system that is *correct*. Two
-failures survive every grounding checker we could find:
+Existing faithfulness evaluators (RAGAS, TruLens, Patronus, Vectara HHEM) score
+**passively, offline, in a single pass**: one LLM judgment per claim, run in a
+notebook after the fact. Three failures follow, and ATTEST targets each one.
 
-1. **The checker isn't reading.** Ask a verifier whether a claim is supported by a chunk and
-   it says yes. Ask it whether the *negation* of that claim is supported by the same chunk
-   and it also says yes. The verdict was never a function of the evidence — but you get a
-   confident "grounded" either way.
-2. **The source itself is stale.** The answer is faithfully grounded in the retrieved chunk.
-   The chunk was written eighteen months ago and is now wrong. Every faithfulness metric
-   scores this as a pass, because faithfulness is measured *against the chunk*.
-
-ATTEST is built to catch exactly these two.
-
-## What it does
-
-It decomposes an AI system's answer into atomic claims and verifies each one **three
-independent ways**, then reconciles the verdicts and streams the whole trace to a dashboard
-live.
-
-| Verifier | Question it asks | Catches |
+| | Existing evaluators | ATTEST |
 |---|---|---|
-| **Entailment** | Does the retrieved chunk entail this claim? | Ordinary hallucination |
-| **Adversarial prober** | Does the verdict *survive mutation* of the claim? | **FRAGILE** |
-| **Independent retrieval** | Does the open web still agree? | **STALE** |
+| **Judgment** | One passive LLM pass. The judge inherits the generator's blind spots, so confidently-wrong claims pass. | A prober **mutates** each claim (negation, entity swap, quantifier shift) and re-verifies. If the verdict doesn't flip when it logically must, the checker wasn't reading the context → `FRAGILE`. |
+| **Scope** | Answer vs. retrieved chunk. Nobody checks whether the *chunk itself* was wrong. | An independent retriever re-searches the open web and cross-checks the **source** → `STALE`. |
+| **Timing** | Offline test harness. You find out in the postmortem. | SDK middleware in the live request path, with a sampling rate and a hard cost budget. Observability, not a test run. |
 
-No verifier ever sees another's output. That independence is the whole design — a majority
-vote between three correlated judges tells you nothing.
+`FRAGILE` and `STALE` are the contributions. Everything else is table stakes,
+executed carefully.
 
-### Verdict taxonomy
+## Verdict taxonomy
 
-```
-GROUNDED       supported by the retrieved context
-FRAGILE        the verdict did not flip when logic says it must — the checker wasn't reading
-UNSUPPORTED    the context neither supports nor contradicts it
-CONTRADICTED   the context says the opposite
-STALE          grounded in the chunk, but the chunk is outdated
-UNVERIFIABLE   subjective, predictive, or otherwise not checkable
-```
+| Verdict | Meaning |
+|---|---|
+| `GROUNDED` | Entailed by retrieved context; verdict stable under all probes |
+| `FRAGILE` | Entailed, but ≥1 probe failed to flip the verdict when it logically should have |
+| `UNSUPPORTED` | No entailment found in retrieved context |
+| `CONTRADICTED` | Retrieved context directly contradicts the claim |
+| `STALE` | Entailed by context, but independent retrieval disagrees with the context |
+| `UNVERIFIABLE` | Subjective, predictive, or otherwise not checkable against evidence |
 
-`FRAGILE` and `STALE` are the two verdicts we could not find in any competing tool.
-Everything else is table stakes.
-
-### How the prober works
-
-For a claim the entailment verifier called `GROUNDED`, the prober generates mutations —
-`negation`, `entity_swap`, `quantifier_shift` — and re-verifies each one through the *same*
-verifier. A negated claim that is still `GROUNDED` against the same chunk is a verifier that
-pattern-matched instead of reading. Every mutation, its expected flip, and its observed
-verdict is persisted to the `probes` table and rendered per-claim in the dashboard, so the
-judgement is auditable rather than asserted.
-
-### Reconciliation
-
-Disagreement between verifiers is a signal to surface, not to average away:
-
-```
-CONTRADICTED > STALE > UNSUPPORTED > FRAGILE > GROUNDED > UNVERIFIABLE
-```
-
-The highest-precedence verdict wins regardless of how many verifiers dissent — one
-`CONTRADICTED` outranks two `GROUNDED`s, deliberately: precision over consensus. A separate
-**disagreement score** is reported alongside, never folded into confidence.
+`UNVERIFIABLE` is not a failure mode — it is how the system protects precision.
+Subjective, predictive, and opinion claims are forced into it by prompt design.
 
 ## Architecture
 
 ```
-       observed pipeline (any RAG/agent app)
-                  │  attest SDK — @observe / wrap() / context manager
-                  ▼
-        POST /v1/observe ──► 202 Accepted, run_id
+        Any RAG / agent pipeline
+                  │
+      attest.observe()   ← SDK captures query, chunks, tool calls, answer
                   │
                   ▼
-            decomposer  (answer ──► atomic claims)
-                  │
-        ┌─────────┼─────────┐        fan-out, asyncio.gather
-        ▼         ▼         ▼        one dead verifier cannot kill a run
-   entailment  prober  independent
-        └─────────┼─────────┘
+          ┌───────────────┐
+          │  DECOMPOSER   │  answer → atomic claims + char spans
+          └───────┬───────┘
+                  │  asyncio.gather, per claim
+      ┌───────────┼───────────────┐
+      ▼           ▼               ▼
+  ENTAILMENT  ADVERSARIAL     INDEPENDENT
+   claim vs    PROBER          RETRIEVER
+  retrieved   mutate +        fresh web search,
+   context    re-verify       cross-check source
+              → FRAGILE       → STALE
+      └───────────┼───────────────┘
                   ▼
-             reconciler  (verdict + confidence + disagreement)
-                  │
-        ┌─────────┴─────────┐
-        ▼                   ▼
-    Supabase           SSE event bus
-   (trace store)   GET /v1/runs/{id}/stream ──► dashboard
+          ┌───────────────┐
+          │  RECONCILER   │  verdict + confidence + disagreement score
+          └───────┬───────┘
+                  ▼
+       Supabase  →  SSE  →  live trace dashboard
 ```
 
-The SDK **never raises into the host pipeline**. Every path is wrapped; on failure it logs
-and returns control. A grounding checker that crashes the app it observes is worse than
-useless.
+Verifiers never see each other's output — independence is the whole design.
+The one narrow, deliberate exception (`VerifyContext.prior_entailment`, required
+by the definition of `STALE` itself) is argued in `CONTRACT_CHANGE_REQUEST.md`.
 
 ## Quickstart
 
-Requires Python 3.11 (`StrEnum`, `datetime.UTC`, and `TimeoutError`/`asyncio.TimeoutError`
-aliasing) and [uv](https://docs.astral.sh/uv/).
+Requires Python 3.11 and [`uv`](https://docs.astral.sh/uv/).
 
 ```bash
-cp .env.example .env          # fill in SUPABASE_* and at least one LLM provider key
-uv sync --all-groups
-psql "$SUPABASE_DB_URL" -f migrations/001_init.sql
-psql "$SUPABASE_DB_URL" -f migrations/002_rls.sql
-
-uv run python demo/build_corpus.py     # materialise the demo corpus
-uv run uvicorn attest.api.main:app --reload
-```
-
-Then open `dashboard/attest-dashboard.html` and point it at `http://localhost:8000`.
-
-```bash
-uv run pytest        # 271 tests
+uv sync
+cp .env.example .env          # then fill in the keys below
+uv run pytest                 # full suite, no network required
 uv run ruff check .
 ```
 
-## API
+Minimum viable `.env`: a Supabase project (`SUPABASE_URL`, `SUPABASE_KEY`) plus
+**at least one** LLM key — `ANTHROPIC_API_KEY`, `GROQ_API_KEY`, or
+`GEMINI_API_KEY`. Providers are tried in that order and any provider without a
+key is skipped entirely, so a `GEMINI_API_KEY`-only setup runs the whole system
+on a free tier. `TAVILY_API_KEY` is optional; the independent retriever falls
+back to DuckDuckGo without it. See `.env.example` for every knob, each
+documented inline.
 
-All routes are prefixed `/v1`.
-
-| Method | Path | Notes |
-|---|---|---|
-| `POST` | `/observe` | Submit a run. `202` + `run_id`; verification is a background task |
-| `GET` | `/runs` | Recent runs |
-| `GET` | `/runs/{run_id}` | Full trace: claims, verifications, probes |
-| `GET` | `/runs/{run_id}/stream` | SSE — live trace, 15 s heartbeat, replays to late subscribers |
-| `POST` | `/demo/query` | Convenience: run the reference RAG pipeline *and* verify it |
-| `POST` | `/evaluate` | Benchmark / ablation sweep |
-| `GET` | `/health` | Liveness. Unauthenticated by design (platform healthcheck) |
-
-## Deployment
-
-One container image, single replica.
+Apply the schema before first run:
 
 ```bash
-docker build -t attest .
-docker run -p 8000:8000 --env-file .env attest
+# paste migrations/001_init.sql into the Supabase SQL editor
+# then migrations/002_rls.sql for row-level security
 ```
 
-`railway.json` and `render.yaml` are both checked in. **The service must run as exactly one
-replica with one worker.** The SSE event bus is in-process memory, so a second worker or
-replica does not error — it silently splits the bus, and a dashboard connected to replica B
-never sees events published on replica A. Scaling out requires replacing the bus with
-Postgres `LISTEN/NOTIFY` or Redis behind the same interface.
+Run the API:
 
-Set `TRUSTED_PROXY_HOPS=1` behind Railway or Render, or rate limiting keys every caller off
-the platform proxy's address and collapses them into one bucket.
+```bash
+uv run uvicorn attest.api.main:app --reload
+# http://localhost:8000/docs
+```
+
+> **Deployment constraint:** run single-process. The SSE broker keeps
+> per-run subscribers in process memory, so multiple workers will drop events.
+
+Run the seeded demo (needs a real LLM key — this path actually generates):
+
+```bash
+uv run python demo/build_corpus.py     # once, materializes demo/corpus/
+uv run python demo/run_demo.py         # both seeded queries, end to end
+```
+
+The demo corpus is 30 fictional "Northwind Devices" documents seeded so that one
+query lands on `STALE` and another on `UNSUPPORTED`/`FRAGILE`. Exactly which
+document and why is written down in `demo/SEED_NOTES.md`.
+
+## API
+
+Base path `/v1`. Full request/response shapes are in `PLAN.md` §5.2 — **frozen**,
+because the dashboard and Opal agent tracks build against them independently.
+
+| Method | Path | Returns |
+|---|---|---|
+| `POST` | `/observe` | `{run_id, status}` (202, verification runs async) |
+| `GET` | `/runs?limit=&offset=` | `{runs: RunSummary[]}` |
+| `GET` | `/runs/{run_id}` | `RunDetail` — the full nested trace |
+| `GET` | `/runs/{run_id}/stream` | SSE trace |
+| `POST` | `/evaluate` | benchmark table |
+| `GET` | `/health` | `{ok, version}` |
+
+SSE event names, which the frontend depends on exactly:
+`run.started` · `claims.decomposed` · `claim.verified` · `probe.completed` ·
+`run.completed` · `run.error`
+
+## SDK
+
+The SDK **never raises into the host pipeline**. Every path is wrapped; on
+failure it logs and returns control. A grounding checker that crashes the app it
+observes is worse than useless — there is a dedicated test suite for exactly
+this (`tests/test_sdk_never_raises.py`).
+
+```python
+import attest
+
+attest.init(api_url="https://...", api_key="...", sample_rate=0.05)
+
+@attest.observe(pipeline_name="support-bot")
+def answer(query: str) -> attest.Output:
+    chunks = retrieve(query)
+    return attest.Output(answer=generate(query, chunks), retrieved_chunks=chunks)
+
+# or, imperatively
+with attest.trace(pipeline_name="support-bot", query=q) as t:
+    t.record_chunks(chunks)
+    t.record_answer(text)
+
+# or wrap a LangChain chain
+chain = attest.wrap(chain, pipeline_name="rag-v2")
+```
+
+## Benchmark
+
+`bench/` is a real evaluation harness over RAGTruth and HaluEval, with four
+ablation configs (single-pass baseline, ATTEST−prober, ATTEST−independent,
+ATTEST full) sharing one decomposition pass per example for a fair comparison.
+Metrics: precision/recall/F1 with bootstrap 95% CIs, cost, p95 latency, plus
+FRAGILE precision-risk and UNVERIFIABLE abstention rates.
+
+```bash
+uv run python -m bench.run_benchmark --n 250 --seed 42 --dataset ragtruth
+```
+
+> **`bench/results.md` and `bench/results.json` currently read `PENDING`.**
+> That is deliberate, not an oversight. No LLM-backed run has been executed yet,
+> and fabricated numbers are worse than absent ones. The verdict → hallucination-
+> label mapping, including the contestable decision to count `FRAGILE` as a
+> positive, is argued in full in `bench/MAPPING.md`.
 
 ## Security posture
 
-The threat that matters for this service is not data theft — it is **someone else spending
-our LLM budget**. `/demo/query` and `/evaluate` each cost multiple model calls, and
-`budget_usd` arrives in the request body. Controls, all in `attest/api/security.py`:
+The primary threat to this service is not data theft, it is **credit burn**:
+`budget_usd` arrives in the request body, so an open `/v1/observe` lets anyone
+who finds the URL spend the team's LLM credits. `attest/api/security.py`
+implements bearer auth, per-IP rate limiting, request-size caps, and security
+headers as raw ASGI middleware (not `BaseHTTPMiddleware`, which buffers and
+stalls SSE). `MAX_BUDGET_USD` caps the caller-supplied budget server-side.
 
-- **Bearer auth** — `ATTEST_API_KEY`, compared with `secrets.compare_digest`. Generic `401`
-  that never distinguishes absent from malformed from wrong. Disabled when the variable is
-  unset, so local development and the dashboard work out of the box; **set it in production.**
-- **Three-tier rate limiting** — 5/min for LLM-heavy endpoints, 20/min writes, 120/min reads,
-  keyed on the real caller IP counted from the right of `X-Forwarded-For` so the bucket
-  cannot be forged with a header.
-- **Server-side spend ceiling** — the caller's `budget_usd` is clamped to `MAX_BUDGET_USD` at
-  the route boundary.
-- **Request size cap** — enforced for chunked bodies too, not just `Content-Length`.
-- **CORS allowlist** — `CORS_ALLOW_ORIGINS`; credentials are disabled automatically on
-  wildcard, since `*` plus `Allow-Credentials: true` is spec-invalid.
-- **Security headers** — `nosniff`, `DENY`, `no-referrer`; HSTS in production only.
-- **Row Level Security** — `migrations/002_rls.sql` enables *and forces* RLS on all five
-  tables and revokes the `anon`/`authenticated` grants. Supabase serves every table over
-  PostgREST; without this the traces are readable directly with the publishable key,
-  bypassing this API entirely. `SUPABASE_KEY` must be the **service_role** key and must never
-  reach a browser.
-- **Log hygiene** — search queries are logged as a truncated SHA-256 digest, never verbatim.
-  They are derived from the observed pipeline's answer, which in a real deployment is someone
-  else's user content.
-- **Subscriber cap** — 8 concurrent SSE subscribers per run; the bus holds an unbounded queue
-  per subscriber.
-- Container runs as **uid 10001**, not root.
+Auth is **off** unless `ATTEST_API_KEY` is set, so local development and the
+other two tracks keep working against the frozen contract untouched. Turning it
+on is a deployment decision that requires telling those tracks first.
 
-All middleware is **pure ASGI**. `BaseHTTPMiddleware` buffers responses in a way that can
-stall `EventSourceResponse`, and live streaming is the point of the product.
+No secrets are committed. `.env` is gitignored, `.env.example` carries
+placeholders only, and search queries are hashed rather than logged verbatim so
+the host application's user content never enters our log retention.
 
 ## Repo layout
 
 ```
 attest/
-  config.py           pydantic-settings; fails loud at boot, never mid-request
-  models.py           all shared Pydantic models
-  llm.py              provider router: anthropic → groq → gemini, with retry
-  search.py           web search client (Tavily → DuckDuckGo) with TTL cache
-  store.py            Supabase read/write
-  orchestrator.py     fan-out, budget enforcement, sampling
-  reconciler.py       verdict resolution + disagreement score
-  verifiers/          decomposer, entailment, prober, mutations, independent
-  api/                main, routes, stream (SSE), security
-  sdk/                @observe decorator, wrappers, async submit queue
-demo/                 seeded corpus + reference RAG pipeline
-bench/                eval harness + ablation runner
-dashboard/            single-file trace dashboard
-migrations/           SQL (001 schema, 002 RLS)
-tests/                271 tests
+  config.py        pydantic-settings, fails loud at boot
+  models.py        all shared Pydantic models (frozen contracts)
+  llm.py           provider router: anthropic | groq | gemini, JSON repair
+  search.py        web search client (Tavily → DuckDuckGo, disk-cached)
+  store.py         Supabase read/write
+  orchestrator.py  fan-out + budget + sampling
+  reconciler.py    verdict resolution + disagreement score
+  verifiers/       decomposer, entailment, prober, mutations, independent
+  api/             main, routes, stream, security
+  sdk/             decorator, wrappers
+demo/              seeded corpus + reference RAG pipeline
+bench/             eval harness + ablation runner
+dashboard/         single-file trace dashboard
+migrations/        SQL schema + RLS
+tests/             pytest, network-free (LLM mocked)
 ```
 
-## Engineering constraints we held to
+## Project documents
 
-- `temperature=0` for every verification call. Non-determinism in a judge is a bug.
-- Verifiers return structured Pydantic objects parsed from JSON with a repair fallback —
-  never regex over prose.
-- Evidence is requested as **character spans into the provided chunk**, not quoted text.
-  Spans are checkable; quotes hallucinate.
-- Subjective, predictive, and opinion claims are forced to `UNVERIFIABLE`. Precision matters
-  more than coverage.
-- Every LLM call logs model, tokens, latency, and cost into `verifications`. Cost visibility
-  is a feature, not an afterthought.
-- No mock data in the main path. Fixtures live in `tests/fixtures/` only.
-
-## Known limitations
-
-Stated here rather than left for someone to find:
-
-- **Single replica only** — the event bus is process memory. Documented above; not fixed.
-- **Decomposition quality bounds everything.** A badly split claim gets three confident
-  verdicts about the wrong proposition.
-- **The prober inherits the entailment verifier's blind spots** for anything its three
-  mutation types don't reach. It detects a specific failure mode, not unreliability in general.
-- **`STALE` depends on web search quality.** A claim the search provider can't find evidence
-  for lands as `UNVERIFIABLE`, not `STALE`.
-- **Cost scales with claim count.** Sampling and a budget ceiling exist because verifying
-  every claim of every request is not economic at real traffic.
-- The reference RAG pipeline in `demo/` is deliberately naive — whole-document chunks, no
-  reranking. It is a reproducible target for the seeded demo cases, not a RAG showcase.
+| File | What it is |
+|---|---|
+| `PLAN.md` | Full spec. Single source of truth. §5 contracts are frozen. |
+| `PROGRESS.md` | What is actually built, per component |
+| `DECISIONS.md` | Technical decisions and their reasoning |
+| `FAILURES.md` | What broke, what was tried, what fixed it |
+| `HANDOFF.md` | Cross-agent integration notes and open items |
+| `CONTRACT_CHANGE_REQUEST.md` | Every change to a frozen contract, with rationale |
+| `CLAUDE.md` | Engineering rules for the agents building this |
 
 ## Team
 
 Byte_pros — Jyotish (25BAI1176), Pragatish (25BAI1406), Ravi (25BAI1146).
 
-The backend, SDK, and benchmark were built against a frozen contract (see `PLAN.md` §5) so
-the dashboard and the Google Opal demo agent could be developed independently and in
-parallel.
+## License
+
+MIT

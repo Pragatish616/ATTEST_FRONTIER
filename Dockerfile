@@ -34,6 +34,33 @@ COPY demo/ ./demo/
 COPY migrations/ ./migrations/
 COPY README.md ./
 
+# Drop root BEFORE warming Chroma. The container needs no privileged ports and
+# writes only to the Chroma directory, so running as uid 10001 means a
+# code-execution bug in a dependency lands on an unprivileged account instead of
+# owning the container.
+#
+# ORDER MATTERS, AND GETTING IT WRONG ONLY FAILS IN THE CONTAINER.
+# The first version of this file warmed Chroma as root and *then* created the
+# user with --no-create-home. Two things broke at runtime, neither visible
+# locally:
+#   1. chromadb's ONNX MiniLM model caches under $HOME/.cache, so warming as
+#      root put it in /root/.cache — unreadable by uid 10001.
+#   2. --no-create-home left $HOME=/home/attest non-existent and uncreatable by
+#      an unprivileged user, so the fallback download died with
+#      `[Errno 13] Permission denied: '/home/attest'` and POST /v1/demo/query
+#      returned 502 on every call.
+# Creating the home directory, exporting HOME/XDG_CACHE_HOME explicitly, and
+# running the warm step as the runtime user bakes the model into the image at a
+# path that user owns.
+RUN useradd --uid 10001 --create-home --home-dir /home/attest --shell /usr/sbin/nologin attest \
+    && mkdir -p /app/data \
+    && chown -R 10001:10001 /app/data /home/attest
+
+ENV HOME=/home/attest \
+    XDG_CACHE_HOME=/home/attest/.cache
+
+USER 10001
+
 # Warm the Chroma index at BUILD time, not first request.
 #
 # demo/corpus/*.md is tracked in git but data/chroma/ is gitignored, so the
@@ -51,13 +78,6 @@ RUN SUPABASE_URL=https://build.invalid \
     SUPABASE_KEY=build-time-placeholder \
     GEMINI_API_KEY=build-time-placeholder \
     python -c "from demo.rag_pipeline import get_collection; c = get_collection(); print('chroma warmed, docs =', c.count())"
-
-# Drop root. The container needs no privileged ports and writes only to the
-# Chroma directory, so running as uid 10001 means a code-execution bug in a
-# dependency lands on an unprivileged account instead of owning the container.
-RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin attest \
-    && chown -R 10001:10001 /app/data
-USER 10001
 
 EXPOSE 8000
 
