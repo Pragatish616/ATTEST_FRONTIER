@@ -1,0 +1,34 @@
+# Render fallback, kept in sync with railway.json and the Dockerfile.
+# Same hard constraint: ONE instance. The SSE event bus is in-process memory.
+services:
+  - type: web
+    name: attest-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    healthCheckPath: /v1/health
+    numInstances: 1
+    autoDeploy: false
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_FAST_MODEL
+        value: gemini-2.5-flash
+      - key: GEMINI_JUDGE_MODEL
+        value: gemini-2.5-flash
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: CORS_ALLOW_ORIGINS
+        sync: false
+      - key: APP_ENV
+        value: prod
+      - key: LOG_LEVEL
+        value: INFO
+      - key: CHROMA_PERSIST_DIR
+        value: /app/data/chroma

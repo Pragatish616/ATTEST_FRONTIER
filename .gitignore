@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environments
+.venv/
+venv/
+.env
+
+# uv
+uv.lock.bak
+
+# Data / local stores
+data/chroma/
+data/search_cache/
+*.sqlite3
+bench/data_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Agent skill tooling (installed via `npx skills add`, not project source)
+.agents/
+.claude/skills/
+agent/
+skills-lock.json

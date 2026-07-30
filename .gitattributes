@@ -1,0 +1,20 @@
+# Normalize all text files to LF in the repository.
+#
+# Why this exists: the working tree was checked out on Windows with CRLF, which
+# made every tracked file show as modified (16,602 insertions / 15,391 deletions
+# for ~1,465 lines of actual change). That buries real diffs and makes a
+# targeted revert impossible. LF in the repo is also what the Linux container
+# and every deploy host expect.
+* text=auto eol=lf
+
+# Binary — never touch these.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.sqlite3 binary
+*.pptx binary
+*.xlsx binary
+*.docx binary

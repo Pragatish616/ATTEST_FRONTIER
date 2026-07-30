@@ -1,0 +1,31 @@
+# Keep the build context small and never ship secrets or local state.
+.git
+.gitignore
+.venv
+venv
+.env
+*.env
+!.env.example
+
+__pycache__
+*.py[cod]
+.ruff_cache
+.pytest_cache
+.coverage
+htmlcov
+
+# Local Chroma index and search cache are rebuilt inside the image; shipping
+# the host's copy would bake a stale corpus (and a stale STALE-detector cache)
+# into the container.
+data/
+
+# Not needed at runtime.
+tests/
+bench/data_cache/
+dashboard/
+*.md
+!README.md
+slide-*.jpg
+.claude/
+.agents/
+agent/
