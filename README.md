@@ -13,6 +13,26 @@ Built for **FRONTIER 2026** (AWS Student Builder Groups, VIT Chennai) — AI Saf
 
 ---
 
+## Live
+
+| | |
+|---|---|
+| **Dashboard** | <https://attest-dashboard.vercel.app> |
+| **API** | <https://attest-api-production.up.railway.app> — [interactive docs](https://attest-api-production.up.railway.app/docs) |
+
+Two entry points. Run the bundled demo RAG and watch it get verified, or paste
+output from **any** pipeline — RAG-Anything, LlamaIndex, LangChain, a bare LLM
+call — into the *Verify an external pipeline* panel, which posts it to
+`POST /v1/observe`. ATTEST never generates, it only observes: anything that can
+produce a query, an answer, and the chunks it retrieved can be verified.
+
+The deployment key is embedded in the dashboard so the link needs no setup. It is
+therefore public and is deliberately not treated as a secret — spend is capped
+server-side by `MAX_BUDGET_USD` and by a 5 requests/minute limit on the
+LLM-heavy routes. See [Security posture](#security-posture).
+
+---
+
 ## Why this is not another RAGAS
 
 Existing faithfulness evaluators (RAGAS, TruLens, Patronus, Vectara HHEM) score
