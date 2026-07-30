@@ -255,7 +255,8 @@ tests/             pytest, network-free (LLM mocked)
 
 ## Team
 
-Byte_pros — Jyotish (25BAI1176), Pragatish (25BAI1406), Ravi (25BAI1146).
+Byte_pros — Jyotish (25BAI1176), Pragatish (25BAI1406), Ravi (25BAI1146),
+Shyam (25BAI1774).
 
 ## License
 
