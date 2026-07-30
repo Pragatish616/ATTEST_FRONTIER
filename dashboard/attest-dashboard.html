@@ -177,8 +177,7 @@
     <div class="label">Verify an external pipeline — POST /v1/observe</div>
     <p class="lede" style="font-size:13.5px;margin:0 0 16px">ATTEST verifies any RAG or agent output, not only the bundled demo. Paste what your own pipeline produced — RAG-Anything, LlamaIndex, LangChain, a bare LLM call — and the same three verifiers decompose and check it. ATTEST never generates; it only observes.</p>
     <div class="row" style="margin:0 0 4px">
-      <input type="text" id="xname" value="raganything" spellcheck="false" aria-label="Pipeline name" />
-      <button class="btn ghost" id="xmode" type="button">Raw JSON <i>&#8646;</i></button>
+      <input type="text" id="xname" value="RAG" spellcheck="false" aria-label="Pipeline name" />
     </div>
     <div id="xform">
       <div class="label" style="margin:18px 0 7px">Query put to your pipeline</div>
@@ -186,11 +185,7 @@
       <div class="label" style="margin:16px 0 7px">Answer your pipeline returned</div>
       <textarea id="xanswer" spellcheck="false" placeholder="Paste the generated answer verbatim — this is what gets decomposed into atomic claims."></textarea>
       <div class="label" style="margin:16px 0 7px">Retrieved context — separate chunks with a line containing only ---</div>
-      <textarea id="xchunks" spellcheck="false" style="min-height:120px" placeholder="Chunk one text...&#10;---&#10;Chunk two text...&#10;&#10;A JSON array of {chunk_index, source_id, text, score} objects is also accepted."></textarea>
-    </div>
-    <div id="xraw" style="display:none">
-      <div class="label" style="margin:18px 0 7px">Raw ObserveRequest body (PLAN.md §5.2)</div>
-      <textarea id="xjson" spellcheck="false" style="min-height:280px;font-family:var(--mono);font-size:12px;line-height:1.55"></textarea>
+      <textarea id="xchunks" spellcheck="false" style="min-height:120px" placeholder="Paste the exact chunks your retriever passed to the generator.&#10;---&#10;One chunk per block, separated by three dashes on their own line.&#10;&#10;A JSON array of {chunk_index, source_id, text, score} objects also works."></textarea>
     </div>
     <div class="row">
       <button class="btn" id="xsend">Verify this output <i>&#8599;</i></button>
@@ -482,16 +477,13 @@ function parseChunks(raw){
          text: c.text ?? c.content ?? c.page_content ?? String(c),
          score: typeof c.score==='number' ? c.score : null});
   }
+  // Positional labels only — 'chunk-2' claims nothing about which document it
+  // came from, but gives the trace something readable to point at.
   return t.split(/^[ \t]*-{3,}[ \t]*$/m).map(s=>s.trim()).filter(Boolean)
-          .map((text,i)=>({chunk_index:i, text}));
+          .map((text,i)=>({chunk_index:i, source_id:`chunk-${i+1}`, text}));
 }
 
 function xBody(){
-  if(document.getElementById('xraw').style.display !== 'none'){
-    const body = JSON.parse(document.getElementById('xjson').value);
-    if(!body.pipeline_name) body.pipeline_name = document.getElementById('xname').value.trim() || 'external';
-    return body;
-  }
   const query  = document.getElementById('xquery').value.trim();
   const answer = document.getElementById('xanswer').value.trim();
   if(!query)  throw new Error('Query is required.');
@@ -547,23 +539,6 @@ async function verifyExternal(){
 }
 
 document.getElementById('xsend').addEventListener('click', verifyExternal);
-document.getElementById('xmode').addEventListener('click', ()=>{
-  const raw = document.getElementById('xraw'), form = document.getElementById('xform');
-  const toRaw = raw.style.display === 'none';
-  if(toRaw && !document.getElementById('xjson').value.trim()){
-    // Seed the editor from whatever is already in the form, so switching modes
-    // is a widening of control rather than a blank page.
-    let seed;
-    try{ seed = xBody(); }
-    catch{ seed = {pipeline_name:document.getElementById('xname').value.trim()||'external',
-                   query:'', answer:'', retrieved_chunks:[{chunk_index:0, source_id:'doc-1', text:''}],
-                   config:{sample_rate:1.0, enable_independent:true, enable_prober:true, budget_usd:0.05}}; }
-    document.getElementById('xjson').value = JSON.stringify(seed, null, 2);
-  }
-  raw.style.display  = toRaw ? '' : 'none';
-  form.style.display = toRaw ? 'none' : '';
-  document.getElementById('xmode').innerHTML = (toRaw ? 'Simple form' : 'Raw JSON') + ' <i>&#8646;</i>';
-});
 animate();
 
 /* Show the most recent run on open — but only once a key is present. On the
