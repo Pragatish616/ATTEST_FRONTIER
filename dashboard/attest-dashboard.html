@@ -194,10 +194,22 @@ setTimeout(function(){
     transition:border-color .5s var(--ease),background .5s var(--ease)}
   .tool textarea:focus{border-color:rgba(196,181,253,.45);background:rgba(255,255,255,.055)}
   .tool .row{margin-top:13px}
+  /* min-width was 180px with flex-shrink left at its default, so in a flex row
+     these refused to shrink and pushed their own text past the container edge.
+     min-width:0 is what actually lets a flex item shrink below its content. */
   input[type=text],input[type=password],select{background:rgba(255,255,255,.05);
     border:1px solid var(--hair-soft);color:var(--ink);border-radius:999px;
-    padding:8px 14px;font-family:var(--mono);font-size:11.5px;min-width:180px;outline:none}
-  input:focus{border-color:rgba(196,181,253,.45)}
+    padding:9px 15px;font-family:var(--mono);font-size:11.5px;outline:none;
+    flex:1 1 200px;min-width:0;max-width:100%;text-overflow:ellipsis;
+    transition:border-color .5s var(--ease),background .5s var(--ease)}
+  input:focus{border-color:rgba(196,181,253,.5);background:rgba(255,255,255,.075)}
+  .row>.btn,.row>button{flex:0 0 auto}
+
+  /* LLM output is unbounded — long claims, long mutated text, long rationales.
+     Anything that renders it needs an explicit wrap or it escapes its box. */
+  .answer,.rationale,.claim span,.tx,.lede,.note,.err,td,.kpi .v{
+    overflow-wrap:anywhere;word-break:break-word}
+  .claim span:not(.pill):not(.conf){flex:1 1 auto;min-width:0}
   .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
   .chip{cursor:pointer;background:rgba(255,255,255,.03);border:1px solid var(--hair-soft);
     color:var(--muted);border-radius:999px;padding:7px 13px;font-size:11.5px;
@@ -209,6 +221,33 @@ setTimeout(function(){
   .spin{display:inline-block;width:9px;height:9px;border-radius:50%;
     background:var(--fragile);margin-right:8px;animation:p 1.1s var(--ease) infinite}
   @keyframes p{0%,100%{opacity:.25}50%{opacity:1}}
+
+  /* ── the wait, treated as a screen rather than a spinner ──
+     Runs take 5–15 minutes. A spinner for that long reads as a hang, so this
+     shows what has already landed, what is still outstanding, and elapsed
+     time — three signals that together say "working", not "stuck". */
+  .prog{display:grid;gap:16px}
+  .prog .bar{height:2px;background:rgba(255,255,255,.07);border-radius:2px;
+    overflow:hidden;position:relative}
+  .prog .bar::after{content:'';position:absolute;inset:0;width:38%;
+    background:linear-gradient(90deg,transparent,var(--violet-lit),transparent);
+    animation:sweep 1.9s var(--ease) infinite}
+  @keyframes sweep{0%{transform:translateX(-100%)}100%{transform:translateX(320%)}}
+  .prog .lines{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;
+    font-family:var(--mono);font-size:10.5px;color:var(--muted)}
+  .prog .big{font-family:var(--mono);font-size:26px;color:var(--ink);
+    letter-spacing:-.02em}
+  .prog .cap{font-size:9.5px;text-transform:uppercase;letter-spacing:.18em;
+    color:var(--faint);margin-top:5px}
+  .prog .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));
+    gap:1px;background:var(--hair-soft);border-radius:12px;overflow:hidden}
+  .prog .cols>div{background:#0a0810;padding:14px 16px}
+  /* claims that have landed but are not yet reconciled */
+  .ghost{height:44px;border-radius:14px;border:1px solid var(--hair-soft);
+    background:linear-gradient(100deg,rgba(255,255,255,.02) 30%,
+      rgba(255,255,255,.06) 50%,rgba(255,255,255,.02) 70%);
+    background-size:220% 100%;animation:shim 2.1s linear infinite}
+  @keyframes shim{0%{background-position:120% 0}100%{background-position:-120% 0}}
   .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1px;
     background:var(--hair-soft);border-radius:14px;overflow:hidden;margin-top:20px}
   .kpi{background:#0a0810;padding:15px 17px}
@@ -237,7 +276,13 @@ setTimeout(function(){
   .vverdict{font-family:var(--mono);font-size:13px;margin:8px 0}
   .vmeta{font-family:var(--mono);font-size:10px;color:var(--faint);margin-top:9px}
   .rationale{color:var(--muted);font-size:12.5px;line-height:1.62}
-  table{width:100%;border-collapse:collapse;margin-top:11px;font-size:12px}
+  /* table-layout:fixed stops one long mutated claim from stretching the table
+     past the card. Without it the widest cell dictates the whole layout. */
+  .tblwrap{width:100%;overflow-x:auto}
+  table{width:100%;table-layout:fixed;border-collapse:collapse;margin-top:11px;
+    font-size:12px}
+  table col.c1{width:15%} table col.c2{width:43%}
+  table col.c3{width:12%} table col.c4{width:16%} table col.c5{width:14%}
   th{text-align:left;font-size:9.5px;text-transform:uppercase;letter-spacing:.16em;
     color:var(--faint);font-weight:500;padding:9px 10px;
     border-bottom:1px solid var(--hair-soft)}
@@ -408,7 +453,7 @@ setTimeout(function(){
         <div class="head">
           <span class="tag rv">04 — Live</span>
           <h2 class="rv">Verify something now.</h2>
-          <p class="lede rv">Ask the bundled demo RAG, or paste output from any pipeline of your own. A run takes 30–90 seconds; claims fill in as each verifier returns.</p>
+          <p class="lede rv">Ask the bundled demo RAG, or paste output from any pipeline of your own. Verification runs asynchronously and typically takes 5–15 minutes; claims fill in as each verifier returns.</p>
         </div>
         <div class="numeral rv">04</div>
       </div>
@@ -588,13 +633,59 @@ function fail(msg, note){
     <div class="note">${esc(note||errNote)}</div></section>`;
 }
 
-async function pollRun(id, tries = 90){
+/* Measured, not guessed: completed runs on this deployment take 5 to 18
+   minutes, because each claim costs about six LLM calls (entailment, three
+   probe re-verifications, independent) and they queue behind the provider's
+   rate limit. The old ceiling here was 90 tries at 1.5s — 135 seconds — so the
+   page gave up long before the backend finished and looked dead while the run
+   was still progressing fine.
+   Now: 1.5s while claims are still arriving, backing off to 5s, for up to 20
+   minutes. The elapsed counter matters as much as the ceiling — a wait with no
+   feedback reads as broken. */
+function progressPanel(d, t0){
+  const claims = d.claims || [];
+  const done = claims.filter(c => c.verdict).length;
+  const el = Math.floor((Date.now() - t0) / 1000);
+  const mm = String(Math.floor(el / 60)).padStart(2, '0');
+  const ss = String(el % 60).padStart(2, '0');
+  const verifs = claims.reduce((n, c) => n + ((c.verifications || []).length), 0);
+  return `<section class="glass tool"><div class="prog">
+    <div class="lines"><span>Verifying · ${esc(d.status || 'running')}</span>
+      <span>runs typically take 5–15 minutes</span></div>
+    <div class="bar"></div>
+    <div class="cols">
+      <div><div class="big">${claims.length}</div><div class="cap">Claims found</div></div>
+      <div><div class="big">${done}</div><div class="cap">Reconciled</div></div>
+      <div><div class="big">${verifs}</div><div class="cap">Verifier calls</div></div>
+      <div><div class="big">${mm}:${ss}</div><div class="cap">Elapsed</div></div>
+    </div>
+    ${claims.length === 0
+      ? `<div style="display:grid;gap:8px">
+           <div class="ghost"></div><div class="ghost"></div><div class="ghost"></div>
+         </div>
+         <div class="note" style="margin:0">Decomposing the answer into atomic claims…</div>`
+      : `<div class="note" style="margin:0">Each claim takes six model calls —
+           entailment, three adversarial probes, and independent retrieval.</div>`}
+  </div></section>`;
+}
+
+/* Measured, not guessed: completed runs take 5 to 18 minutes, because each claim
+   costs about six LLM calls and they queue behind the provider rate limit. The
+   old ceiling was 90 tries at 1.5s — 135 seconds — so the page gave up long
+   before the backend finished and looked dead while the run progressed fine.
+   Now 20 minutes, and the wait is a panel rather than a spinner. */
+async function pollRun(id, tries = 400){
   let last = null;
-  for(let i=0;i<tries;i++){
+  const t0 = Date.now();
+  for(let i = 0; i < tries; i++){
     last = await jget(`${api()}/runs/${id}`);
-    if(last.status==='complete' || last.status==='error') return last;
-    if(last.claims && last.claims.length) render(last);   // progressive fill
-    await new Promise(r=>setTimeout(r,1500));
+    if(last.status === 'complete' || last.status === 'error') return last;
+    // once claims carry verdicts the real trace is more informative than the
+    // progress panel, so hand over to it
+    const reconciled = (last.claims || []).some(c => c.verdict);
+    stage.innerHTML = reconciled ? '' : progressPanel(last, t0);
+    if(reconciled) render(last);
+    await new Promise(r => setTimeout(r, i < 20 ? 1500 : 5000));
   }
   return last;
 }
@@ -731,7 +822,9 @@ const vcard = v => `<div class="vcard">
 
 function probeRows(ps){
   if(!ps.length) return `<div class="note">No probes recorded for this claim.</div>`;
-  return `<table><thead><tr><th>Mutation</th><th>Mutated claim</th>
+  return `<div class="tblwrap"><table>
+    <colgroup><col class="c1"><col class="c2"><col class="c3"><col class="c4"><col class="c5"></colgroup>
+    <thead><tr><th>Mutation</th><th>Mutated claim</th>
     <th>Expected flip</th><th>Observed</th><th>Flipped</th></tr></thead><tbody>
     ${ps.map(p=>`<tr>
       <td class="mono">${esc(p.mutation_type)}</td>
@@ -739,7 +832,7 @@ function probeRows(ps){
       <td class="mono">${p.expected_flip?'yes':'no'}</td>
       <td class="mono" style="color:${vc(p.observed_verdict)}">${esc(p.observed_verdict)}</td>
       <td class="mono ${p.flipped?'flip-y':'flip-n'}">${p.flipped?'flipped':'DID NOT FLIP'}</td>
-    </tr>`).join('')}</tbody></table>`;
+    </tr>`).join('')}</tbody></table></div>`;
 }
 
 function render(d){
