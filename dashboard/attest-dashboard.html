@@ -145,7 +145,7 @@
     <div class="island">
       <div class="brand"><b>ATTEST</b> <span>/ trace</span></div>
       <input type="text" id="api" value="https://attest-api-production.up.railway.app/v1" spellcheck="false" aria-label="API base URL" />
-      <input type="password" id="key" placeholder="API key — blank if auth off" spellcheck="false" aria-label="API key" />
+      <input type="password" id="key" placeholder="API key — paste to begin" spellcheck="false" aria-label="API key" />
       <input type="text" id="runid" placeholder="run id — blank = latest" spellcheck="false" aria-label="Run ID" />
       <button class="btn ghost" id="load">Load run <i>&#8599;</i></button>
     </div>
@@ -171,6 +171,31 @@
       <span class="status" id="status"></span>
     </div>
     <div class="chips" id="chips"></div>
+  </div></section>
+
+  <section class="shell reveal composer"><div class="core">
+    <div class="label">Verify an external pipeline — POST /v1/observe</div>
+    <p class="lede" style="font-size:13.5px;margin:0 0 16px">ATTEST verifies any RAG or agent output, not only the bundled demo. Paste what your own pipeline produced — RAG-Anything, LlamaIndex, LangChain, a bare LLM call — and the same three verifiers decompose and check it. ATTEST never generates; it only observes.</p>
+    <div class="row" style="margin:0 0 4px">
+      <input type="text" id="xname" value="raganything" spellcheck="false" aria-label="Pipeline name" />
+      <button class="btn ghost" id="xmode" type="button">Raw JSON <i>&#8646;</i></button>
+    </div>
+    <div id="xform">
+      <div class="label" style="margin:18px 0 7px">Query put to your pipeline</div>
+      <textarea id="xquery" spellcheck="false" style="min-height:56px" placeholder="What question was asked?"></textarea>
+      <div class="label" style="margin:16px 0 7px">Answer your pipeline returned</div>
+      <textarea id="xanswer" spellcheck="false" placeholder="Paste the generated answer verbatim — this is what gets decomposed into atomic claims."></textarea>
+      <div class="label" style="margin:16px 0 7px">Retrieved context — separate chunks with a line containing only ---</div>
+      <textarea id="xchunks" spellcheck="false" style="min-height:120px" placeholder="Chunk one text...&#10;---&#10;Chunk two text...&#10;&#10;A JSON array of {chunk_index, source_id, text, score} objects is also accepted."></textarea>
+    </div>
+    <div id="xraw" style="display:none">
+      <div class="label" style="margin:18px 0 7px">Raw ObserveRequest body (PLAN.md §5.2)</div>
+      <textarea id="xjson" spellcheck="false" style="min-height:280px;font-family:var(--mono);font-size:12px;line-height:1.55"></textarea>
+    </div>
+    <div class="row">
+      <button class="btn" id="xsend">Verify this output <i>&#8599;</i></button>
+      <span class="status" id="xstatus"></span>
+    </div>
   </div></section>
 
   <div id="stage"></div>
@@ -207,6 +232,23 @@ const authHeaders = (extra = {}) => {
   return k ? {...extra, authorization: `Bearer ${k}`} : {...extra};
 };
 
+/* DELIBERATE EXCEPTION — documented rather than hidden.
+ *
+ * The deployment key is baked in so the hosted dashboard is zero-touch for
+ * judges and teammates. This page is public, so View Source reveals it: the
+ * value below is NOT a secret and must not be treated as one. Bearer auth on
+ * this deployment therefore stops casual scanners, not a determined caller.
+ *
+ * What actually caps the damage is server-side and unaffected by this:
+ *   - MAX_BUDGET_USD clamps the caller-supplied budget at the route boundary
+ *   - /demo/query and /evaluate are rate limited to 5 requests/minute per IP
+ *
+ * Rotate ATTEST_API_KEY (or unset it) once the event is over. The field stays
+ * editable, so a different key can be pasted over this one at any time.
+ */
+const DEFAULT_API_KEY = 'attest_bbBugAAAoV8cJ24uQGDXDLAHvahowCqOTopxYP4f7HE';
+document.getElementById('key').value = DEFAULT_API_KEY;
+
 async function jget(url){
   const r = await fetch(url,{headers:authHeaders({'accept':'application/json'})});
   if(!r.ok) throw new Error(`${r.status} ${r.statusText} — ${url}`);
@@ -235,6 +277,7 @@ const setStatus = (t, busy) =>
 async function ask(){
   const q = document.getElementById('q').value.trim();
   if(!q) return;
+  if(!apiKey()){ setStatus('paste the API key in the top bar first'); return; }
   document.getElementById('ask').disabled = true;
   setStatus('generating answer…', true);
   try{
@@ -263,7 +306,7 @@ async function ask(){
     setStatus('');
     stage.innerHTML = `<section class="shell reveal"><div class="core">
       <div class="err"><b>Could not run that query.</b><br>${esc(e.message)}</div>
-      <div class="note">502 = the LLM provider failed (rate limit or outage) · 503 = corpus not built, or the API was not started from the repo root · 404 = this build predates POST /v1/demo/query</div>
+      <div class="note">401 = missing or wrong API key · 502 = the LLM provider failed (rate limit or outage) · 503 = corpus not built · 429 = rate limited, 5 queries/min</div>
     </div></section>`;
     animate();
   }finally{ document.getElementById('ask').disabled = false; }
@@ -300,7 +343,7 @@ async function load(){
     setStatus('');
     stage.innerHTML = `<section class="shell reveal"><div class="core">
       <div class="err"><b>Could not load the trace.</b><br>${esc(e.message)}</div>
-      <div class="note">Check the API is running and that the base URL ends in /v1.</div>
+      <div class="note">401 = missing or wrong API key. Paste it in the top bar.</div>
     </div></section>`;
     animate();
   }finally{ btn.disabled = false; }
@@ -418,8 +461,117 @@ document.getElementById('q').addEventListener('keydown', e=>{
 });
 document.getElementById('load').addEventListener('click', load);
 document.getElementById('runid').addEventListener('keydown', e=>{ if(e.key==='Enter') load(); });
+
+/* ---------- external pipeline: POST /v1/observe -------------------------- */
+
+const setXStatus = (t, busy) =>
+  document.getElementById('xstatus').innerHTML = t ? (busy?'<span class="spin"></span>':'') + esc(t) : '';
+
+/* Accepts either a JSON array (objects or bare strings) or plain text blocks
+   separated by a line of ---. Real pipelines emit both shapes, and asking
+   someone to hand-write RetrievedChunk JSON at a demo booth is a good way to
+   lose two minutes to a missing comma. */
+function parseChunks(raw){
+  const t = (raw||'').trim();
+  if(!t) return [];
+  if(t.startsWith('[')){
+    return JSON.parse(t).map((c,i)=> typeof c === 'string'
+      ? {chunk_index:i, text:c}
+      : {chunk_index: Number.isInteger(c.chunk_index)?c.chunk_index:i,
+         source_id: c.source_id ?? null, source_url: c.source_url ?? null,
+         text: c.text ?? c.content ?? c.page_content ?? String(c),
+         score: typeof c.score==='number' ? c.score : null});
+  }
+  return t.split(/^[ \t]*-{3,}[ \t]*$/m).map(s=>s.trim()).filter(Boolean)
+          .map((text,i)=>({chunk_index:i, text}));
+}
+
+function xBody(){
+  if(document.getElementById('xraw').style.display !== 'none'){
+    const body = JSON.parse(document.getElementById('xjson').value);
+    if(!body.pipeline_name) body.pipeline_name = document.getElementById('xname').value.trim() || 'external';
+    return body;
+  }
+  const query  = document.getElementById('xquery').value.trim();
+  const answer = document.getElementById('xanswer').value.trim();
+  if(!query)  throw new Error('Query is required.');
+  if(!answer) throw new Error('Answer is required — it is what gets decomposed into claims.');
+  return {
+    pipeline_name: document.getElementById('xname').value.trim() || 'external',
+    query, answer,
+    retrieved_chunks: parseChunks(document.getElementById('xchunks').value),
+    // budget_usd is clamped server-side to MAX_BUDGET_USD; sending more is harmless.
+    config: {sample_rate:1.0, enable_independent:true, enable_prober:true, budget_usd:0.05}
+  };
+}
+
+async function verifyExternal(){
+  const btn = document.getElementById('xsend');
+  let body;
+  try{ body = xBody(); }
+  catch(e){ setXStatus(e.message.startsWith('Unexpected') ? 'chunks/JSON did not parse: '+e.message : e.message); return; }
+  if(!apiKey()){ setXStatus('paste the API key in the top bar first'); return; }
+
+  btn.disabled = true;
+  setXStatus('submitting to /v1/observe…', true);
+  try{
+    const r = await fetch(`${api()}/observe`, {
+      method:'POST', headers:authHeaders({'content-type':'application/json'}),
+      body: JSON.stringify(body)
+    });
+    const out = await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(out.detail ? JSON.stringify(out.detail) : `${r.status} ${r.statusText}`);
+
+    document.getElementById('runid').value = out.run_id;
+    setXStatus('accepted 202 — decomposing and verifying…', true);
+    stage.innerHTML = `<section class="shell reveal"><div class="core">
+      <div class="label">Observed output — ${esc(body.pipeline_name)}</div>
+      <div class="answer">${esc(body.answer)}</div>
+      <div class="note">${body.retrieved_chunks.length} chunk(s) supplied · run ${esc(out.run_id)}</div>
+    </div></section>`;
+    animate();
+
+    const d = await pollRun(out.run_id);
+    render(d);
+    setXStatus(d.status==='complete'
+      ? `done · ${d.total_claims ?? 0} claim(s) · $${num(d.cost_usd,6)}`
+      : `run status: ${d.status}`);
+  }catch(e){
+    setXStatus('');
+    stage.innerHTML = `<section class="shell reveal"><div class="core">
+      <div class="err"><b>Could not verify that output.</b><br>${esc(e.message)}</div>
+      <div class="note">401 = missing or wrong API key · 422 = body did not match ObserveRequest · 429 = rate limited, 20 writes/min · 413 = body over 512 KiB</div>
+    </div></section>`;
+    animate();
+  }finally{ btn.disabled = false; }
+}
+
+document.getElementById('xsend').addEventListener('click', verifyExternal);
+document.getElementById('xmode').addEventListener('click', ()=>{
+  const raw = document.getElementById('xraw'), form = document.getElementById('xform');
+  const toRaw = raw.style.display === 'none';
+  if(toRaw && !document.getElementById('xjson').value.trim()){
+    // Seed the editor from whatever is already in the form, so switching modes
+    // is a widening of control rather than a blank page.
+    let seed;
+    try{ seed = xBody(); }
+    catch{ seed = {pipeline_name:document.getElementById('xname').value.trim()||'external',
+                   query:'', answer:'', retrieved_chunks:[{chunk_index:0, source_id:'doc-1', text:''}],
+                   config:{sample_rate:1.0, enable_independent:true, enable_prober:true, budget_usd:0.05}}; }
+    document.getElementById('xjson').value = JSON.stringify(seed, null, 2);
+  }
+  raw.style.display  = toRaw ? '' : 'none';
+  form.style.display = toRaw ? 'none' : '';
+  document.getElementById('xmode').innerHTML = (toRaw ? 'Simple form' : 'Raw JSON') + ' <i>&#8646;</i>';
+});
 animate();
-load();   // show the most recent run on open; harmless if there are none yet
+
+/* Show the most recent run on open — but only once a key is present. On the
+   hosted dashboard the field starts empty, and auto-loading would greet every
+   visitor with a 401 error box before they have had a chance to paste one.
+   Fires automatically the moment a key is entered. */
+if (apiKey()) load();
+document.getElementById('key').addEventListener('change', () => { if (apiKey()) load(); });
 </script>
 </body>
 </html>
